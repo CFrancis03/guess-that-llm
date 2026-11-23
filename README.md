@@ -63,11 +63,11 @@ It names the right lab 64.2% of the time on validation, but the right model only
 | 2 | Fine-tuned DistilRoBERTa | 0.38 |
 | 3 | Level 3 question, below | – |
 
-**Level 3 question:** Can models from the same lab be told apart, and what gives them away: punctuation, word choice or word order? I will compare model-level and lab-level accuracy, check whether errors stay within a lab, and measure how much accuracy drops when I remove punctuation or shuffle word order.
+**Level 3 question:** Can models from the same lab be told apart, and what gives them away: punctuation, word choice or word order? I will compare model-level and lab-level accuracy, check whether errors stay within a lab, and measure how much accuracy drops when I remove punctuation or shuffle word order. I run each ablation two ways: (a) **test time only**, where the trained model sees altered validation/test passages, to show what it relies on; and (b) **retrained**, where train, validation and test are all altered and the model is retrained, to show how much signal is left without that cue.
 
 ## 5. Evaluation
 
-Main metric: **balanced accuracy**, because every model should count equally and it is the competition's metric. I also report accuracy, macro-F1 and the confusion matrix. Choices are made on validation; test is used once. The test set is small, so I run 3 seeds. Success means clearly beating Level 0 and answering the Level 3 question with evidence.
+Main metric: **balanced accuracy**, because every model should count equally and it is the competition's metric. I also report accuracy, macro-F1 and the confusion matrix. Choices are made on validation; test is used once. The test set is small (25 prompts), so I run 3 seeds and report a 95% bootstrap interval for balanced accuracy that resamples prompts (1,000 resamples, `bootstrap.py`). Success means clearly beating Level 0 and answering the Level 3 question with evidence.
 
 ## 6. Plan
 

@@ -24,6 +24,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import (accuracy_score, balanced_accuracy_score,
                              confusion_matrix, f1_score)
 
+from bootstrap import bootstrap_ci
 from nll_data import lab_of, load_splits
 
 p = argparse.ArgumentParser()
@@ -112,11 +113,13 @@ def predict(net, X):
     return np.concatenate(out)
 
 
-def metrics(y, pred):
+def metrics(y, pred, prompt_ids):
     pred_lab = [lab_of(labels[i]) for i in pred]
     true_lab = [lab_of(labels[i]) for i in y]
     return {
         "balanced_accuracy": balanced_accuracy_score(y, pred),
+        # 95% interval from resampling prompts
+        "balanced_accuracy_ci95": bootstrap_ci(y, pred, prompt_ids),
         "accuracy": accuracy_score(y, pred),
         "macro_f1": f1_score(y, pred, average="macro"),
         "lab_accuracy": accuracy_score(true_lab, pred_lab),
@@ -152,18 +155,21 @@ def run(seed):
 
 os.makedirs("results", exist_ok=True)
 name = f"level1_{args.model}{('_' + args.tag) if args.tag else ''}"
-evals = [("val", X_va, y_va)] + ([("test", X_te, y_te)] if args.eval_test else [])
-per_split = {s: [] for s, _, _ in evals}
+evals = [("val", X_va, y_va, val["prompt_id"])] + \
+    ([("test", X_te, y_te, test["prompt_id"])] if args.eval_test else [])
+per_split = {s: [] for s, *_ in evals}
 for seed in args.seeds:
     net, best_epoch = run(seed)
-    for split, X, y in evals:
-        m = metrics(y, predict(net, X))
+    for split, X, y, pids in evals:
+        m = metrics(y, predict(net, X), pids)
         m.update({"task": "name_that_llm", "level": 1, "model": args.model, "split": split,
                   "seed": seed, "best_epoch": best_epoch, "n": len(y), "config": vars(args)})
         with open(f"results/{name}_seed{seed}_{split}.json", "w") as f:
             json.dump(m, f, indent=2)
         per_split[split].append(m)
-        print(f"{split} seed {seed}: balanced accuracy {m['balanced_accuracy']:.3f}, "
+        ci = m["balanced_accuracy_ci95"]
+        print(f"{split} seed {seed}: balanced accuracy {m['balanced_accuracy']:.3f} "
+              f"[{ci['ci_low']:.3f}, {ci['ci_high']:.3f}], "
               f"accuracy {m['accuracy']:.3f}, macro-F1 {m['macro_f1']:.3f}, "
               f"lab accuracy {m['lab_accuracy']:.3f}")
 
@@ -173,6 +179,9 @@ for split, ms in per_split.items():
     for k in ["balanced_accuracy", "accuracy", "macro_f1", "lab_accuracy"]:
         v = [m[k] for m in ms]
         summ[k + "_mean"], summ[k + "_std"] = float(np.mean(v)), float(np.std(v))
+    # bootstrap interval of the seed-mean: average the per-seed interval bounds
+    summ["balanced_accuracy_ci95_mean_of_seeds"] = {
+        b: float(np.mean([m["balanced_accuracy_ci95"][b] for m in ms])) for b in ["ci_low", "ci_high"]}
     with open(f"results/{name}_summary_{split}.json", "w") as f:
         json.dump(summ, f, indent=2)
     print(f"{split} mean over seeds: balanced accuracy "
