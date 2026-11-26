@@ -12,6 +12,7 @@ from sklearn.metrics import (accuracy_score, balanced_accuracy_score,
                              confusion_matrix, f1_score)
 from sklearn.pipeline import make_pipeline
 
+from bootstrap import bootstrap_ci
 from nll_data import lab_of, load_splits
 
 splits = load_splits()
@@ -30,6 +31,8 @@ def metrics(df):
     pred_lab = [lab_of(p) for p in pred]
     return {
         "balanced_accuracy": balanced_accuracy_score(df["model"], pred),
+        # 95% interval from resampling prompts
+        "balanced_accuracy_ci95": bootstrap_ci(df["model"], pred, df["prompt_id"]),
         "accuracy": accuracy_score(df["model"], pred),
         "macro_f1": f1_score(df["model"], pred, average="macro"),
         # share of predictions that name a model from the right lab
@@ -47,6 +50,8 @@ for name, df in [("val", val), ("test", test)]:
     path = f"results/level0_name_that_llm_{name}.json"
     with open(path, "w") as f:
         json.dump(m, f, indent=2)
-    print(f"{name}: balanced accuracy {m['balanced_accuracy']:.3f}, "
+    ci = m["balanced_accuracy_ci95"]
+    print(f"{name}: balanced accuracy {m['balanced_accuracy']:.3f} "
+          f"[{ci['ci_low']:.3f}, {ci['ci_high']:.3f}], "
           f"accuracy {m['accuracy']:.3f}, macro-F1 {m['macro_f1']:.3f}, "
           f"lab accuracy {m['lab_accuracy']:.3f}  -> {path}")

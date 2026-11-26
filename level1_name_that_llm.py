@@ -14,6 +14,7 @@ Each run is far below the 30-minute T4 limit (a few minutes at most).
 import argparse
 import json
 import os
+import random
 import re
 from collections import Counter
 
@@ -24,6 +25,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import (accuracy_score, balanced_accuracy_score,
                              confusion_matrix, f1_score)
 
+from bootstrap import bootstrap_ci
 from nll_data import lab_of, load_splits
 
 p = argparse.ArgumentParser()
@@ -104,19 +106,25 @@ class BiLSTM(nn.Module):
 
 
 @torch.no_grad()
-def predict(net, X):
+def logits_of(net, X):
     net.eval()
     out = []
     for i in range(0, X.shape[0], 256):
-        out.append(net(batch(X, np.arange(i, min(i + 256, X.shape[0])))).argmax(1).cpu().numpy())
-    return np.concatenate(out)
+        out.append(net(batch(X, np.arange(i, min(i + 256, X.shape[0])))).float().cpu())
+    return torch.cat(out)
 
 
-def metrics(y, pred):
+def predict(net, X):
+    return logits_of(net, X).argmax(1).numpy()
+
+
+def metrics(y, pred, prompt_ids):
     pred_lab = [lab_of(labels[i]) for i in pred]
     true_lab = [lab_of(labels[i]) for i in y]
     return {
         "balanced_accuracy": balanced_accuracy_score(y, pred),
+        # 95% interval from resampling prompts
+        "balanced_accuracy_ci95": bootstrap_ci(y, pred, prompt_ids),
         "accuracy": accuracy_score(y, pred),
         "macro_f1": f1_score(y, pred, average="macro"),
         "lab_accuracy": accuracy_score(true_lab, pred_lab),
@@ -126,44 +134,62 @@ def metrics(y, pred):
 
 
 def run(seed):
-    torch.manual_seed(seed)
+    # fix every source of randomness
+    random.seed(seed)
     np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     net = (MLP() if args.model == "mlp" else BiLSTM()).to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     lossf = nn.CrossEntropyLoss()
     best, best_state, best_epoch = -1, None, 0
     rng = np.random.default_rng(seed)
+    history = []  # per epoch, for the training-curve figure
     for ep in range(1, args.epochs + 1):
         net.train()
         order = rng.permutation(X_tr.shape[0])
+        total = 0.0
         for i in range(0, len(order), args.batch_size):
             idx = order[i:i + args.batch_size]
             opt.zero_grad()
-            lossf(net(batch(X_tr, idx)), torch.from_numpy(y_tr[idx]).to(dev)).backward()
+            loss = lossf(net(batch(X_tr, idx)), torch.from_numpy(y_tr[idx]).to(dev))
+            loss.backward()
             opt.step()
-        bal = balanced_accuracy_score(y_va, predict(net, X_va))  # epoch chosen on validation only
+            total += loss.item() * len(idx)
+        va_logits = logits_of(net, X_va)
+        va_loss = nn.functional.cross_entropy(va_logits, torch.from_numpy(y_va)).item()
+        bal = balanced_accuracy_score(y_va, va_logits.argmax(1).numpy())  # epoch chosen on validation only
+        history.append({"epoch": ep, "train_loss": total / len(order),
+                        "val_loss": va_loss, "val_balanced_accuracy": bal})
         if bal > best:
             best, best_epoch = bal, ep
             best_state = {k: v.detach().clone() for k, v in net.state_dict().items()}
-        print(f"seed {seed} epoch {ep:2d} val balanced acc {bal:.3f}")
+        print(f"seed {seed} epoch {ep:2d} train loss {total / len(order):.3f} "
+              f"val loss {va_loss:.3f} val balanced acc {bal:.3f}")
     net.load_state_dict(best_state)
-    return net, best_epoch
+    return net, best_epoch, history
 
 
 os.makedirs("results", exist_ok=True)
 name = f"level1_{args.model}{('_' + args.tag) if args.tag else ''}"
-evals = [("val", X_va, y_va)] + ([("test", X_te, y_te)] if args.eval_test else [])
-per_split = {s: [] for s, _, _ in evals}
+evals = [("val", X_va, y_va, val["prompt_id"])] + \
+    ([("test", X_te, y_te, test["prompt_id"])] if args.eval_test else [])
+per_split = {s: [] for s, *_ in evals}
 for seed in args.seeds:
-    net, best_epoch = run(seed)
-    for split, X, y in evals:
-        m = metrics(y, predict(net, X))
+    net, best_epoch, history = run(seed)
+    n_params = sum(prm.numel() for prm in net.parameters())
+    for split, X, y, pids in evals:
+        m = metrics(y, predict(net, X), pids)
         m.update({"task": "name_that_llm", "level": 1, "model": args.model, "split": split,
-                  "seed": seed, "best_epoch": best_epoch, "n": len(y), "config": vars(args)})
+                  "seed": seed, "best_epoch": best_epoch, "n": len(y), "n_params": n_params,
+                  "config": vars(args), "history": history})
         with open(f"results/{name}_seed{seed}_{split}.json", "w") as f:
             json.dump(m, f, indent=2)
         per_split[split].append(m)
-        print(f"{split} seed {seed}: balanced accuracy {m['balanced_accuracy']:.3f}, "
+        ci = m["balanced_accuracy_ci95"]
+        print(f"{split} seed {seed}: balanced accuracy {m['balanced_accuracy']:.3f} "
+              f"[{ci['ci_low']:.3f}, {ci['ci_high']:.3f}], "
               f"accuracy {m['accuracy']:.3f}, macro-F1 {m['macro_f1']:.3f}, "
               f"lab accuracy {m['lab_accuracy']:.3f}")
 
@@ -173,6 +199,9 @@ for split, ms in per_split.items():
     for k in ["balanced_accuracy", "accuracy", "macro_f1", "lab_accuracy"]:
         v = [m[k] for m in ms]
         summ[k + "_mean"], summ[k + "_std"] = float(np.mean(v)), float(np.std(v))
+    # bootstrap interval of the seed-mean: average the per-seed interval bounds
+    summ["balanced_accuracy_ci95_mean_of_seeds"] = {
+        b: float(np.mean([m["balanced_accuracy_ci95"][b] for m in ms])) for b in ["ci_low", "ci_high"]}
     with open(f"results/{name}_summary_{split}.json", "w") as f:
         json.dump(summ, f, indent=2)
     print(f"{split} mean over seeds: balanced accuracy "
