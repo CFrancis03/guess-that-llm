@@ -1,0 +1,42 @@
+{
+  "task": "name_that_llm",
+  "level": 1,
+  "model": "bilstm",
+  "split": "val",
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "config": {
+    "model": "bilstm",
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "epochs": 30,
+    "batch_size": 64,
+    "lr": 0.001,
+    "weight_decay": 0.01,
+    "hidden": 256,
+    "dropout": 0.5,
+    "max_features": 50000,
+    "emb_dim": 100,
+    "max_len": 300,
+    "eval_test": true,
+    "tag": ""
+  },
+  "balanced_accuracy_mean": 0.20074074074074075,
+  "balanced_accuracy_std": 0.007332959212304925,
+  "accuracy_mean": 0.20074074074074075,
+  "accuracy_std": 0.007332959212304932,
+  "macro_f1_mean": 0.1609304885006815,
+  "macro_f1_std": 0.012547414418515375,
+  "lab_accuracy_mean": 0.5562962962962963,
+  "lab_accuracy_std": 0.019230748127032835,
+  "balanced_accuracy_ci95_mean_of_seeds": {
+    "ci_low": 0.17037037037037037,
+    "ci_high": 0.2355555555555556
+  }
+}

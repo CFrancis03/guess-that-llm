@@ -1,5 +1,11 @@
 {
   "balanced_accuracy": 0.2977777777777778,
+  "balanced_accuracy_ci95": {
+    "ci_low": 0.2666666666666667,
+    "ci_high": 0.3311111111111111,
+    "n_boot": 1000,
+    "unit": "prompt"
+  },
   "accuracy": 0.29777777777777775,
   "macro_f1": 0.288073216099093,
   "lab_accuracy": 0.6333333333333333,
