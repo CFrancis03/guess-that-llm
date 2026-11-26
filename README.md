@@ -2,7 +2,7 @@
 
 **Author:** Colton Francis · CSCI 490-B9 Deep Learning, NIU, Fall 2026
 
-**AI tool use:** Claude (claude.ai) helped draft this README and write the scripts. I chose the task, split, models and Level 3 question, and ran the scripts myself.
+**AI tool use:** Claude (claude.ai) helped draft this README and write the scripts. I chose the task, split, models and Level 3 question, and ran the scripts myself. *Progress report:* Claude Code wrote `level1_name_that_llm.py` (MLP and BiLSTM), `bootstrap.py`, `summarize_results.py`, `plot_curves.py` and `run_on_colab.ipynb`, and drafted section 7. I ran every experiment on Colab and checked the numbers in this README against the files in `results/`.
 
 ## 1. Task
 
@@ -79,11 +79,56 @@ Main metric: **balanced accuracy**, because every model should count equally and
 | 11/23 – 11/29 | Level 2: fine-tune DistilRoBERTa |
 | 11/30 – 12/3 | Level 3 tests; presentation (Level 2) |
 
-## Results
+## 7. Progress report
 
-| Level | Model | Validation | Test | Results file |
+### Results
+
+Balanced accuracy; Level 1 is the mean ± standard deviation over seeds 0, 1, 2. Every number comes from the files listed (`python summarize_results.py level1_mlp level1_bilstm` prints them).
+
+| Level | Model | Validation | Test | Results files |
 |---|---|---:|---:|---|
-| 0 | TF-IDF char n-grams + logistic regression | 0.264 | 0.298 | `results/level0_name_that_llm_val.json`, `_test.json` |
+| 0 | TF-IDF char n-grams + logistic regression | 0.264 | 0.298 | `level0_name_that_llm_{val,test}.json` |
+| 1 | **MLP on TF-IDF char n-grams** | **0.270 ± 0.003** | **0.296 ± 0.008** | `level1_mlp_seed{0,1,2}_{val,test}.json` |
+| 1 | BiLSTM on word + punctuation tokens | 0.199 ± 0.013 | 0.182 ± 0.021 | `level1_bilstm_seed{0,1,2}_{val,test}.json` |
+
+| Level | Model | Lab accuracy (val / test) | Macro-F1 (val / test) |
+|---|---|---:|---:|
+| 0 | TF-IDF + logistic regression | 0.642 / 0.633 | 0.260 / 0.288 |
+| 1 | MLP | 0.651 / 0.647 | 0.262 / 0.285 |
+| 1 | BiLSTM | 0.565 / 0.565 | 0.162 / 0.148 |
+
+The 95% bootstrap interval over prompts is about ±0.03 for a single seed (for example MLP seed 0: validation 0.267 [0.247, 0.287], test 0.293 [0.267, 0.322]), so Level 0 and the MLP are within noise of each other.
+
+### (a) What I built
+
+Two neural models, both trained from scratch with `level1_name_that_llm.py` (AdamW, learning rate 1e-3, weight decay 0.01, batch 64, cross-entropy, up to 30 epochs):
+
+- **MLP:** the same character 2–5-gram TF-IDF features as Level 0 (top 50,000 features, fit on train only) → dropout 0.2 → linear 256 → ReLU → dropout 0.5 → linear 18. About 12.8 M parameters, almost all in the first layer.
+- **BiLSTM:** lowercased word and punctuation tokens (punctuation such as "—" is kept as its own token; words seen once are mapped to UNK; at most 300 tokens) → 100-d embeddings learned from scratch → bidirectional LSTM with 128 units per direction → max-pool over tokens → dropout 0.5 → linear 18. About 240 k parameters plus 100 per vocabulary word for the embeddings.
+
+**Chosen on validation:** the epoch. After each epoch I compute validation balanced accuracy and keep the best epoch (MLP: epochs 12, 9, 7 for seeds 0, 1, 2; BiLSTM: 28, 28, 13). The other settings are the script defaults; I did not run a grid over them before the test run, and I did not tune after it, because the test set may be used only once per final setting.
+
+### (b) How it compares
+
+- **Against Level 0:** the MLP ties Level 0 (0.270 vs 0.264 on validation, 0.296 vs 0.298 on test); the difference is far inside the ±0.03 bootstrap interval. The BiLSTM is clearly worse (0.199 / 0.182).
+- **Against the proposal:** I expected 0.30 on validation for Level 1. The MLP is 3 points short; the BiLSTM is 10 points short.
+- **Past the average:** the lab is easy and the model inside the lab is hard. The MLP names the right lab 65% of the time but the right model only 27%. In the Level 0 confusion matrix, about half of all errors (51% on validation) stay inside the right lab, and the most frequent confusions are siblings: `gemini-3.8-flash` → `gemini-3.7-flash`, `gpt-5.6-terra` → `gpt-5.6-luna`, `gpt-6-astra` → `gpt-5.6-luna`. Recall ranges from 0.08 (`claude-fable-5`) to 0.48 (`claude-opus-5`).
+- **Level 1 MLP per model:** TODO — fill in from `python summarize_results.py level1_mlp` (recall per model, share of errors inside the lab).
+
+![Training curves, MLP seed 0](figures/level1_mlp_seed0_curves.png)
+
+The figure shows training and validation loss (left) and validation balanced accuracy (right) per epoch for the MLP, seed 0. Validation balanced accuracy reaches about 0.25 by epoch 6, peaks at epoch 12 (0.267, the kept epoch) and then drifts down to about 0.25 while training continues: more epochs do not help, so keeping the best validation epoch matters.
+
+### (c) What works, what does not
+
+- **Character n-grams carry the signal.** Putting a hidden layer on top of them (MLP) does not add anything over logistic regression: with 1,799 passages and 50,000 features, the extra capacity mostly memorizes. The limit is the features and the data, not the classifier.
+- **Learning words from scratch does not work with 100 passages per model.** The BiLSTM must learn embeddings for every word from 1,799 passages. For two of three seeds its best epoch was 28 of 30, so it may be undertrained, and it is unstable across seeds (lab accuracy 0.49 for seed 1, about 0.60 for the others). It also lowercases text, which throws away capitalization.
+- **What I tried that did not help:** a hidden layer over TF-IDF (MLP, no gain) and a sequence model over words (BiLSTM, worse).
+
+### (d) What I will change
+
+- **Level 2:** a pretrained model, which already knows English and only has to learn the style differences — the thing the BiLSTM could not learn from 1,799 passages. Main model: **Qwen3-0.6B-Base fine-tuned with LoRA** (base frozen in fp16, adapters and classification head trained), with **DistilRoBERTa** (`level2_name_that_llm.py`, full fine-tune) as a smaller comparison. Both keep case and punctuation. Same protocol: learning rate and epochs chosen on validation, three seeds, test once.
+- **Level 3 question (sharpened by Level 1):** Level 1 shows the lab is easy (≈65%) and the model inside the lab is hard (≈27%). *Which cues separate models inside one lab: punctuation, word choice or word order?* I will (1) measure the share of errors inside the right lab and the hardest sibling pairs, (2) compare a lab-then-model classifier with the flat one, and (3) run three ablations — remove punctuation, shuffle word order, keep only punctuation — both at test time only and retrained, reporting model-level and lab-level balanced accuracy with bootstrap intervals on validation.
 
 ## How to run
 
@@ -93,7 +138,14 @@ kaggle competitions download -c name-that-llm -p data
 unzip data/name-that-llm.zip -d data
 python data_check.py
 python level0_name_that_llm.py
+pip install torch matplotlib
+python level1_name_that_llm.py --model mlp --seeds 0 1 2 --eval-test
+python level1_name_that_llm.py --model bilstm --seeds 0 1 2 --eval-test
+python summarize_results.py level1_mlp level1_bilstm
+python plot_curves.py level1_mlp 0
 ```
+
+On Colab (T4 GPU), `run_on_colab.ipynb` runs all of this; each Level 1 run takes a few minutes.
 
 ## Data source
 

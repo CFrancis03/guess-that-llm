@@ -14,6 +14,7 @@ Each run is far below the 30-minute T4 limit (a few minutes at most).
 import argparse
 import json
 import os
+import random
 import re
 from collections import Counter
 
@@ -105,12 +106,16 @@ class BiLSTM(nn.Module):
 
 
 @torch.no_grad()
-def predict(net, X):
+def logits_of(net, X):
     net.eval()
     out = []
     for i in range(0, X.shape[0], 256):
-        out.append(net(batch(X, np.arange(i, min(i + 256, X.shape[0])))).argmax(1).cpu().numpy())
-    return np.concatenate(out)
+        out.append(net(batch(X, np.arange(i, min(i + 256, X.shape[0])))).float().cpu())
+    return torch.cat(out)
+
+
+def predict(net, X):
+    return logits_of(net, X).argmax(1).numpy()
 
 
 def metrics(y, pred, prompt_ids):
@@ -129,28 +134,41 @@ def metrics(y, pred, prompt_ids):
 
 
 def run(seed):
-    torch.manual_seed(seed)
+    # fix every source of randomness
+    random.seed(seed)
     np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     net = (MLP() if args.model == "mlp" else BiLSTM()).to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     lossf = nn.CrossEntropyLoss()
     best, best_state, best_epoch = -1, None, 0
     rng = np.random.default_rng(seed)
+    history = []  # per epoch, for the training-curve figure
     for ep in range(1, args.epochs + 1):
         net.train()
         order = rng.permutation(X_tr.shape[0])
+        total = 0.0
         for i in range(0, len(order), args.batch_size):
             idx = order[i:i + args.batch_size]
             opt.zero_grad()
-            lossf(net(batch(X_tr, idx)), torch.from_numpy(y_tr[idx]).to(dev)).backward()
+            loss = lossf(net(batch(X_tr, idx)), torch.from_numpy(y_tr[idx]).to(dev))
+            loss.backward()
             opt.step()
-        bal = balanced_accuracy_score(y_va, predict(net, X_va))  # epoch chosen on validation only
+            total += loss.item() * len(idx)
+        va_logits = logits_of(net, X_va)
+        va_loss = nn.functional.cross_entropy(va_logits, torch.from_numpy(y_va)).item()
+        bal = balanced_accuracy_score(y_va, va_logits.argmax(1).numpy())  # epoch chosen on validation only
+        history.append({"epoch": ep, "train_loss": total / len(order),
+                        "val_loss": va_loss, "val_balanced_accuracy": bal})
         if bal > best:
             best, best_epoch = bal, ep
             best_state = {k: v.detach().clone() for k, v in net.state_dict().items()}
-        print(f"seed {seed} epoch {ep:2d} val balanced acc {bal:.3f}")
+        print(f"seed {seed} epoch {ep:2d} train loss {total / len(order):.3f} "
+              f"val loss {va_loss:.3f} val balanced acc {bal:.3f}")
     net.load_state_dict(best_state)
-    return net, best_epoch
+    return net, best_epoch, history
 
 
 os.makedirs("results", exist_ok=True)
@@ -159,11 +177,13 @@ evals = [("val", X_va, y_va, val["prompt_id"])] + \
     ([("test", X_te, y_te, test["prompt_id"])] if args.eval_test else [])
 per_split = {s: [] for s, *_ in evals}
 for seed in args.seeds:
-    net, best_epoch = run(seed)
+    net, best_epoch, history = run(seed)
+    n_params = sum(prm.numel() for prm in net.parameters())
     for split, X, y, pids in evals:
         m = metrics(y, predict(net, X), pids)
         m.update({"task": "name_that_llm", "level": 1, "model": args.model, "split": split,
-                  "seed": seed, "best_epoch": best_epoch, "n": len(y), "config": vars(args)})
+                  "seed": seed, "best_epoch": best_epoch, "n": len(y), "n_params": n_params,
+                  "config": vars(args), "history": history})
         with open(f"results/{name}_seed{seed}_{split}.json", "w") as f:
             json.dump(m, f, indent=2)
         per_split[split].append(m)
