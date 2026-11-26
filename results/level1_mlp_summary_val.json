@@ -1,0 +1,42 @@
+{
+  "task": "name_that_llm",
+  "level": 1,
+  "model": "mlp",
+  "split": "val",
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "config": {
+    "model": "mlp",
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "epochs": 30,
+    "batch_size": 64,
+    "lr": 0.001,
+    "weight_decay": 0.01,
+    "hidden": 256,
+    "dropout": 0.5,
+    "max_features": 50000,
+    "emb_dim": 100,
+    "max_len": 300,
+    "eval_test": true,
+    "tag": ""
+  },
+  "balanced_accuracy_mean": 0.2762962962962963,
+  "balanced_accuracy_std": 0.006869347033700513,
+  "accuracy_mean": 0.27629629629629626,
+  "accuracy_std": 0.006869347033700524,
+  "macro_f1_mean": 0.2705957987183986,
+  "macro_f1_std": 0.007783603137246085,
+  "lab_accuracy_mean": 0.6422222222222222,
+  "lab_accuracy_std": 0.016329931618554536,
+  "balanced_accuracy_ci95_mean_of_seeds": {
+    "ci_low": 0.24592592592592596,
+    "ci_high": 0.3118518518518519
+  }
+}
